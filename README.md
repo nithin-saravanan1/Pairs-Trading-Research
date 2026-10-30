@@ -1,103 +1,45 @@
 # Pairs-Trading-Research
 
-import pandas as pd
-import numpy as np
-import statsmodels.api as sm
+Group project for F434 at Indiana University's Kelley School of Business, studying
+what happens to the SPY and VOO order books when their prices temporarily diverge.
 
-from statsmodels.tsa.ar_model import AutoReg, ar_select_order
-from statsmodels.tsa.regime_switching.markov_autoregression import MarkovAutoregression
+**Team:** Brooklyn Clark, Griffin Dusseau, Nithin Saravanan, Sameer Siddiqui
 
-import pandas_datareader as pdr
-import pandas as pd
+## Research Question
+SPY and VOO both track the S&P 500, so their prices should move almost in lockstep.
+How often do they break apart, how long do those breaks last, and what does
+liquidity look like while they're happening?
 
-df = pd.read_csv("/content/data_xy.csv")
+## Data
+- 1-second top-of-book quote data (best bid, best ask, and sizes) for SPY and VOO
+- Regular trading hours only
+- 1,422,008 total observations
 
-df['mid_VOO'] = (df['bid_px_00_VOO'] + df['ask_px_00_VOO']) / 2
-df['mid_SPY'] = (df['bid_px_00_SPY'] + df['ask_px_00_SPY']) / 2
-#Mid price of each etf
+## Defining a Dislocation
+1. Compute the mid price for each ETF from its best bid and ask
+2. Form the ratio Mid(SPY) / Mid(VOO)
+3. Compute a rolling intraday z-score of that ratio
+4. Flag a dislocation when the absolute z-score exceeds 2.58 (the 99% two-sided threshold)
 
-df['mispricing'] = np.log(df['mid_VOO']) - np.log(df['mid_SPY'])
-df['mispricing_lag'] = df['mispricing'].shift(1)
-#Mispricing Variable
+## Methods
+- **Stationarity:** Augmented Dickey-Fuller test on the price ratio
+- **Persistence and liquidity:** OLS regression of mispricing (log price spread) on its own lag and lagged liquidity
+- **Time-series structure:** AR(3) autoregressive model, with ACF and PACF to guide lag selection
+- **Regime detection:** two-regime Markov Switching autoregression with switching variance, separating low- and high-volatility states
 
-df['depth_VOO'] = df['ask_sz_00_VOO'] - df['bid_sz_00_VOO'] / df['mid_VOO']
-df['depth_SPY'] = df['ask_sz_00_SPY'] - df['bid_sz_00_SPY'] / df['mid_SPY']
+## Key Findings
+- **Dislocations occur about 3% of the time.** 41,815 of 1.42 million observations (2.94%) crossed the ±2.58 threshold, roughly three times what a normal distribution predicts. The z-score distribution has fat tails, so normal-based risk models would understate how often these events happen.
+- **The relationship is stable and mean-reverting.** The ADF statistic of −23.4 (p < 0.01) shows the price ratio is stationary, so deviations are temporary rather than permanent drift.
+- **Dislocations are persistent in the short run.** The lagged mispricing coefficient of 0.9954 implies a half-life of about 150 seconds, so a typical gap closes gradually over a few minutes rather than instantly.
+- **Liquidity dries up during dislocations.** Bid-ask spreads widen for both ETFs and quoted size falls, pointing to fragile liquidity and higher trading costs exactly when the opportunity appears. Lagged liquidity had a small negative coefficient, consistent with liquidity helping correct mispricing.
+- **Two distinct regimes.** The Markov model separates a calm, highly persistent regime (AR coefficient 0.91) from a volatile regime that is much less persistent (0.25) and tends to end quickly.
 
-df['liq_mid'] = df['depth_VOO'] - df['depth_SPY']
-df['liq_lag'] = df['liq_mid'].shift(1).dropna()
-#Liquidity Variable
+## Limitations
+- The regression's R² of 0.99 comes mostly from the lagged mispricing term, which is expected for a highly persistent series, so it shouldn't be read as strong predictive power from liquidity.
+- Wider spreads during dislocations mean transaction costs could absorb much of the potential arbitrage profit. A backtest with realistic costs would be the natural next step.
 
-df
-new_df = df[['mid_VOO', 'mid_SPY', 'liq_mid', 'depth_VOO', 'depth_SPY']]
+## Tools
+Python, pandas, NumPy, statsmodels, Matplotlib, Google Colab
 
-import numpy as np
-import matplotlib.pyplot as plt
-
-coef = 0.9954
-periods = 400
-shock = np.array([coef**t for t in range(periods)])
-half_life = int(np.log(0.5) / np.log(coef))
-
-plt.plot(shock)
-plt.axvline(half_life, color='red', linestyle='--', label=f'Half-life: {half_life} periods')
-plt.axhline(0.5, color='gray', linestyle=':')
-plt.title('Mispricing Impulse Response: How Long Does a Dislocation Last?')
-plt.xlabel('Periods After Shock')
-plt.ylabel('Remaining Mispricing (normalized)')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-X = df[['mispricing_lag', 'liq_lag']]   # independent variables
-y = df["mispricing"]             # dependent variable
-
-# Drop rows with NaN values from X and y
-data_for_model = pd.concat([y, X], axis=1).dropna()
-y = data_for_model["mispricing"]
-X = data_for_model[['mispricing_lag', 'liq_lag']]
-
-X = sm.add_constant(X)           # adds intercept (VERY important)
-
-model = sm.OLS(y, X).fit()
-
-print(model.summary())
-
-plt.figure(figsize=(10,10))
-plt.plot(df['ts_event'],df['mid_VOO'])
-plt.plot(df['ts_event'],df['mid_SPY'])
-plt.show()
-
-plt.figure(figsize=(10,10))
-plt.plot(df['ts_event'],df['liq_lag'])
-plt.plot(df['ts_event'],df['mispricing_lag'])
-plt.plot(df['ts_event'],df['mispricing'])
-plt.show()
-
-import statsmodels.api as sm
-import matplotlib.pyplot as plt
-
-# ACF (autocorrelation function)
-sm.graphics.tsa.plot_acf(paired['mispricing'], lags=50)
-plt.show()
-
-# PACF (partial autocorrelation)
-sm.graphics.tsa.plot_pacf(paired['mispricing'], lags=50)
-plt.show()
-
-plt.figure(figsize=(10,10))
-plt.plot(voo['ts_event'],voo['bid_px_00'])
-plt.plot(voo['ts_event'],voo['ask_px_00'])
-plt.show()
-
-plt.figure(figsize=(50,10))
-plt.plot(spy['ts_event'],spy['bid_px_00'])
-plt.plot(spy['ts_event'],spy['ask_px_00'])
-plt.show()
-
-df['d_mispricing'] = paired['mispricing'].diff().dropna()
-mispricing_mod = MarkovAutoregression(df['d_mispricing'], k_regimes=2, order=1, switching_variance=True)
-
-mispricing_res = mispricing_mod.fit(disp=True)
-print(mispricing_res.summary())
-
-mispricing_res.filtered_marginal_probabilities[0].plot(figsize=(12,4))
+## Files
+- `Pairs_Trading_Project.ipynb`: full analysis notebook
